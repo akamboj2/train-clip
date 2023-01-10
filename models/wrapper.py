@@ -10,6 +10,194 @@ from cosine_annealing_warmup import CosineAnnealingWarmupRestarts
 from .model import CLIP
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import os
+from torchvision import transforms
+import torch
+import torchvision
+from pytorch_lightning import LightningDataModule
+import pytorch_lightning
+
+
+template = "A person is "
+gt_labels = ["Cook.Cut"             ,
+            "Cook.Usemicrowave"     ,
+            "Cook.Useoven"          ,
+            "Cook.Usestove"         ,
+            "Drink.Frombottle"      ,
+            "Drink.Fromcup"         ,
+            "Eat.Snack"             ,
+            "Eat.Useutensil"        ,
+            "Exercise"              ,
+            "Getup"                 ,
+            "Lay.Onbed"             ,
+            "Nap"                   ,
+            "Play.Boardgame"        ,
+            "Read"                  ,
+            "Use.Coffeemachine"     ,
+            "Use.Computer"          ,
+            "Use.Dishwasher"        ,
+            "Use.Gamecontroller"    ,
+            "Use.Kettle"            ,
+            "Use.Mop"               ,
+            "Use.Phone"             ,
+            "Use.Refrig"            ,
+            "Use.Shelf"             ,
+            "Use.Sink"              ,
+            "Use.Switch"            ,
+            "Use.Tablet"            ,
+            "Use.Vaccum"            ,
+            "Watch.TV"              ,
+            "Write"                             
+            ]
+sentences = ["cooking by cutting something",
+    "cooking using a microwave",
+    "cooking using an oven",
+    "cooking using a stove",
+    "drinking from a bottle",
+    "drinking from a cup",
+    "eating a snack",
+    "eating using a utensil",
+    "exercising",
+    "getting up",
+    "laying on a bed",
+    "napping",
+    "playing a boardgame",
+    "reading",
+    "using a coffee machine",
+    "using a computer",
+    "using a dishwasher",
+    "using a gname controller",
+    "using a kettle",
+    "using a mop",
+    "using a phone",
+    "using a refrigerator",
+    "using a shelf",
+    "using a sink",
+    "using a ninetendo switch",
+    "using a tablet",
+    "using a vaccum",
+    "watching TV",
+    "writing"
+]
+text_labels = [template + w for w in sentences]
+text_dict = {a:b for a,b in zip(gt_labels,text_labels)}
+
+#for debugging:
+class ImageFolderWithPaths(torchvision.datasets.ImageFolder):
+    """Custom dataset that includes image file paths. Extends
+    torchvision.datasets.ImageFolder
+    """
+
+    # override the __getitem__ method. this is the method that dataloader calls
+    def __getitem__(self, index):
+        # this is what ImageFolder normally returns 
+        original_tuple = super(ImageFolderWithPaths, self).__getitem__(index)
+        # the image file path
+        path = self.imgs[index][0]
+
+        # print(self.imgs[index],self.classes[self.imgs[index][1]],text_dict[self.classes[original_tuple[1]]])
+        # for i,j in text_dict.items():
+        #     print(i,j)
+        # print()
+        # exit()
+        #use class text as label, not index
+        class_txts = text_dict[self.classes[original_tuple[1]]]
+        #self.classes translates the class indices to words (use.shelf, etc.)
+        #text dict makes the labels full sentences
+
+        # make a new tuple that includes original and the path
+        tuple_with_path = ((original_tuple[0],) + (class_txts,) + (path,))
+        return tuple_with_path
+
+#function to load dataset
+def load_dataset():
+    traindir = os.path.join('/home/abhi/research/SmartHome/Data/image_folder_data', 'train')
+    valdir = os.path.join('/home/abhi/research/SmartHome/Data/image_folder_data', 'val')
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+    crop_scale = 0.08
+    lighting_param = 0.1
+    train_transforms = transforms.Compose([
+        transforms.RandomResizedCrop(224, scale=(crop_scale, 1.0)),
+
+        # util.Lighting(lighting_param),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(10),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.25, 0.25, 0.25])
+        # normalize,
+    ])
+
+    train_dataset = ImageFolderWithPaths( #for debuggging
+        traindir,
+        transform=train_transforms
+    )
+    train_dataset_small = train_dataset
+    # train_dataset_small = torch.utils.data.Subset(
+    #     train_dataset, 
+    #     random.sample(range(len(train_dataset)), k=int(len(train_dataset)/20)))
+
+    trainloader = torch.utils.data.DataLoader(
+        train_dataset_small, batch_size=32, shuffle=True,
+        num_workers=max(8, 2*torch.cuda.device_count()), 
+        pin_memory=True, drop_last=True,
+        # sampler=torch.utils.data.distributed.DistributedSampler(train_dataset_small, shuffle=True)
+    )
+
+    val_dataset = torchvision.datasets.ImageFolder(valdir, transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor()
+            # normalize
+        ]))
+    val_dataset_small = val_dataset
+    # val_dataset_small = torch.utils.data.Subset(
+    #     val_dataset,
+    #     random.sample(range(len(val_dataset)), k=int(len(val_dataset)/10)))
+
+    valloader = torch.utils.data.DataLoader(
+        val_dataset_small,
+        batch_size=32, shuffle=False,
+        num_workers=max(8, 2*torch.cuda.device_count()), 
+        pin_memory=True, drop_last=False
+    )
+
+    return trainloader, valloader, train_dataset_small
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 class CLIPWrapper(pl.LightningModule):
     def __init__(self,
                  model_name: str,
@@ -32,25 +220,61 @@ class CLIPWrapper(pl.LightningModule):
         self.automatic_optimization = False
     
     # Sourced from https://github.com/PyTorchLightning/pytorch-lightning/issues/5449
-    @property
+    # @property
     def num_training_steps(self) -> int:
         """Total training steps inferred from datamodule and devices."""
-        dataset = self.train_dataloader()
-        if self.trainer.max_steps:
-            return self.trainer.max_steps
+        # dataset = self.train_dataloader()
+        # if self.trainer.max_steps:
+        #     return self.trainer.max_steps
 
+        dataset = self.trainer._data_connector._train_dataloader_source.dataloader()
         dataset_size = len(dataset)
+        print("IN HERe\n\n ",dataset_size)
 
-        num_devices = max(1, self.trainer.num_gpus, self.trainer.num_processes)
-        if self.trainer.tpu_cores:
-            num_devices = max(num_devices, self.trainer.tpu_cores)
+        num_devices = max(1, self.trainer.num_devices)#, self.trainer.num_processes)
+        # if self.trainer.num_devices:
+        #     num_devices = max(num_devices, self.trainer.num_devices)
 
         effective_batch_size = dataset.batch_size * self.trainer.accumulate_grad_batches * num_devices
-        return (dataset_size // effective_batch_size) * self.trainer.max_epochs
+        # return (dataset_size // effective_batch_size) * self.trainer.max_epochs
+        return dataset_size * self.trainer.max_epochs // (self.trainer.accumulate_grad_batches * num_devices)
+    # @property
+    # def num_training_steps(self) -> int:
+    #     """Total training steps inferred from datamodule and devices."""
+    #     #if self.trainer.max_steps:
+    #     #    return self.trainer.max_steps
+
+    #     #dataset = self.train_dataloader()
+    #     dataset = self.trainer._data_connector._train_dataloader_source.dataloader()
+    #     dataset_size = len(dataset)
+
+    #     num_devices = max(1, self.trainer.num_gpus, self.trainer.num_processes)
+    #     if self.trainer.tpu_cores:
+    #         num_devices = max(num_devices, self.trainer.tpu_cores)
+
+    #     effective_batch_size = dataset.batch_size * self.trainer.accumulate_grad_batches * num_devices
+    #     #print(dataset.batch_size, self.trainer.accumulate_grad_batches, num_devices)
+    #     #print(dataset_size, effective_batch_size, self.trainer.max_epochs)
+    #     #num_steps = (dataset_size // effective_batch_size) * self.trainer.max_epochs
+    #     self.num_steps = dataset_size * self.trainer.max_epochs // (self.trainer.accumulate_grad_batches * num_devices)
+    #     # print(num_steps)
+    #     return self.num_steps
 
     # Training loss: https://github.com/openai/CLIP/issues/83
     # Mini-batching thanks to https://github.com/crowsonkb / https://twitter.com/RiversHaveWings
     # Multi-GPU support: https://github.com/MicPie/clasp
+
+    # def setup(self, stage=None):
+    #     self.dataloader_train, dataloader_test,self.dataset = load_dataset()
+    #     return self.dataset
+    # def prepare_data(self):
+    #     pass
+    # def train_dataloader(self):
+    #     sampler = torch.utils.data.distributed.DistributedSampler(self.dataset, shuffle=True)
+    #     dataloader = torch.utils.data.DataLoader(self.dataset, batch_size=32, sampler=sampler, shuffle=False)
+    #     return dataloader
+
+
     def training_step(self, train_batch, idx):
         # get optimizers and scheduler
         optimizer = self.optimizers()
@@ -143,7 +367,7 @@ class CLIPWrapper(pl.LightningModule):
         # Use pip install 'git+https://github.com/katsura-jp/pytorch-cosine-annealing-with-warmup'
         lr_scheduler = CosineAnnealingWarmupRestarts(
             optimizer,
-            first_cycle_steps=self.num_training_steps,
+            first_cycle_steps=self.num_training_steps(),
             cycle_mult=1.0,
             max_lr=lr,
             min_lr=0,
@@ -334,7 +558,7 @@ class CustomCLIPWrapper(CLIPWrapper):
         # Use pip install 'git+https://github.com/katsura-jp/pytorch-cosine-annealing-with-warmup'
         lr_scheduler = CosineAnnealingWarmupRestarts(
             optimizer,
-            first_cycle_steps=self.num_training_steps,
+            first_cycle_steps=self.num_training_steps(),
             cycle_mult=1.0,
             max_lr=lr,
             min_lr=0,
