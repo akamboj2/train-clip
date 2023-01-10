@@ -11,6 +11,7 @@ import torchvision
 from pytorch_lightning import LightningDataModule
 import pytorch_lightning
 import clip
+import random
 
 global_batch_size = 8
 
@@ -91,22 +92,17 @@ class ImageFolderWithPaths(torchvision.datasets.ImageFolder):
         # the image file path
         path = self.imgs[index][0]
 
-        # print(self.imgs[index],self.classes[self.imgs[index][1]],text_dict[self.classes[original_tuple[1]]])
-        # for i,j in text_dict.items():
-        #     print(i,j)
-        # print()
-        # exit()
         #use class text as label, not index
         class_txts = text_dict[self.classes[original_tuple[1]]]
         #self.classes translates the class indices to words (use.shelf, etc.)
         #text dict makes the labels full sentences
 
+        tokenized_text =  clip.tokenize(class_txts)[0]
+
         # make a new tuple that includes original and the path
-        # tuple_with_path = ((original_tuple[0],) + (class_txts,) + (path,))
+        # tuple_with_path = ((original_tuple[0],) + (tokenized_text,) + (path,))
         # return tuple_with_path
 
-
-        tokenized_text =  clip.tokenize(class_txts)[0]
         #taking out path for pytorch lightning
         return  original_tuple[0], tokenized_text
 
@@ -134,9 +130,9 @@ def load_dataset():
         transform=train_transforms
     )
     train_dataset_small = train_dataset
-    # train_dataset_small = torch.utils.data.Subset(
-    #     train_dataset, 
-    #     random.sample(range(len(train_dataset)), k=int(len(train_dataset)/20)))
+    train_dataset_small = torch.utils.data.Subset(
+        train_dataset_small, 
+        random.sample(range(len(train_dataset)), k=int(len(train_dataset)/20)))
 
     trainloader = torch.utils.data.DataLoader(
         train_dataset_small, batch_size=global_batch_size, shuffle=True,
@@ -145,16 +141,21 @@ def load_dataset():
         # sampler=torch.utils.data.distributed.DistributedSampler(train_dataset_small, shuffle=True)
     )
 
-    val_dataset = torchvision.datasets.ImageFolder(valdir, transforms.Compose([
+    val_transforms = transforms.Compose([
             transforms.Resize(256),
             transforms.CenterCrop(224),
             transforms.ToTensor()
             # normalize
-        ]))
+        ])
+    val_dataset = ImageFolderWithPaths( #for debuggging
+        valdir,
+        transform=val_transforms
+    )
+    
     val_dataset_small = val_dataset
-    # val_dataset_small = torch.utils.data.Subset(
-    #     val_dataset,
-    #     random.sample(range(len(val_dataset)), k=int(len(val_dataset)/10)))
+    val_dataset_small = torch.utils.data.Subset(
+        val_dataset_small,
+        random.sample(range(len(val_dataset)), k=int(len(val_dataset)/10)))
 
     valloader = torch.utils.data.DataLoader(
         val_dataset_small,
@@ -171,71 +172,18 @@ class TextImageDataModule(LightningDataModule):
         super().__init__()
 
     def setup(self, stage=None):
-        self.dataloader_train, dataloader_test,self.dataset = load_dataset()
+        self.dataloader_train, self.dataloader_test,self.dataset = load_dataset()
         return self.dataset
     def prepare_data(self):
         pass
     def train_dataloader(self):
-        sampler = torch.utils.data.distributed.DistributedSampler(self.dataset, shuffle=True)
-        dataloader = torch.utils.data.DataLoader(self.dataset, batch_size=32, sampler=sampler, shuffle=False)
-        return dataloader
-        # return self.dataloader_train
+        # sampler = torch.utils.data.distributed.DistributedSampler(self.dataset, shuffle=True)
+        # dataloader = torch.utils.data.DataLoader(self.dataset, batch_size=32, sampler=sampler, shuffle=False)
+        # return dataloader
+        return self.dataloader_train
+    def val_dataloader(self):
+        return self.dataloader_test
 
-
-    # def __init__(self):
-    #     super().__init__()
-          
-    #     # Directory to store MNIST Data
-    #     self.download_dir = ''
-          
-    #     # Defining batch size of our data
-    #     self.batch_size = 32
-          
-    #     # Defining transforms to be applied on the data
-    #     self.transform = transforms.Compose([
-    #         transforms.ToTensor()
-    #     ])
-  
-    # def prepare_data(self):
-        
-    #       # Downloading our data
-    #     torchvision.datasets.MNIST(self.download_dir, 
-    #                    train = True, download = True)
-          
-    #     torchvision.datasets.MNIST(self.download_dir,
-    #                    train = False, download = True)
-  
-    # def setup(self, stage=None):
-        
-    #       # Loading our data after applying the transforms
-    #     data = torchvision.datasets.MNIST(self.download_dir,
-    #                           train = True, 
-    #                           transform = self.transform)
-          
-    #     self.train_data, self.valid_data = torch.utils.data.random_split(data,
-    #                                                     [55000, 5000])
-  
-    #     self.test_data = torchvision.datasets.MNIST(self.download_dir,
-    #                                     train = False,
-    #                                     transform = self.transform)
-  
-    # def train_dataloader(self):
-        
-    #       # Generating train_dataloader
-    #     return torch.utils.data.DataLoader(self.train_data, 
-    #                       batch_size = self.batch_size)
-  
-    # def val_dataloader(self):
-        
-    #       # Generating val_dataloader
-    #     return torch.utils.data.DataLoader(self.valid_data,
-    #                       batch_size = self.batch_size)
-  
-    # def test_dataloader(self):
-        
-    #     # Generating test_dataloader
-    #     return torch.utils.data.DataLoader(self.test_data,
-    #                       batch_size = self.batch_size)
 
    
 def main(hparams):
@@ -249,7 +197,8 @@ def main(hparams):
     model = CLIPWrapper(hparams.model_name, config, hparams.minibatch_size)
     del hparams.model_name
     # dm = TextImageDataModule.from_argparse_args(hparams)
-    trainer = Trainer.from_argparse_args(hparams, precision=16, max_epochs=32, devices=1, accelerator="gpu",strategy="ddp")
+    trainer = Trainer.from_argparse_args(hparams, precision=16, max_epochs=32, devices=1, \
+        accelerator="gpu",strategy="ddp")
     # trainer.fit(model, dm)
 
     
