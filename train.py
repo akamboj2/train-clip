@@ -13,6 +13,9 @@ import pytorch_lightning
 import clip
 import random
 
+import tensorboard
+
+
 global_batch_size = 8
 
 template = "A person is "
